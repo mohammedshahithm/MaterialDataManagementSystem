@@ -6,7 +6,13 @@ import type {
   RetentionSettings, User, DownloadHistoryItem,
 } from '../types';
 
-const API_BASE = import.meta.env.VITE_API_URL || 'http://localhost:3001/api';
+// In production, default to '/api' so requests route relatively via Vercel rewrites (or reverse proxies).
+// In development, uses VITE_API_URL if provided, or '/api' which Vite dev proxy targets to localhost:3001.
+const rawApiUrl = import.meta.env.VITE_API_URL;
+const API_BASE =
+  import.meta.env.PROD && (!rawApiUrl || rawApiUrl.includes('localhost'))
+    ? '/api'
+    : (rawApiUrl || '/api');
 
 const api = axios.create({ baseURL: API_BASE });
 
