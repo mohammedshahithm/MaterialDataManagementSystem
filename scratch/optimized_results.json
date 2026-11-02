@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-11-02T08:18:35.009Z",
+  "network": {
+    "dbTcpLatencyMs": 54.91356666666669,
+    "storageTcpLatencyMs": 18.444033333333284
+  },
+  "api": {
+    "healthMs": 13.32013333333335,
+    "dashboardMs": 833.2126000000002,
+    "batchesMs": 635.1384333333334,
+    "storageSummaryMs": 599.5594666666663,
+    "productDetailMs": 796.7839000000004,
+    "filePreviewCall1Ms": 475.97100000000137,
+    "filePreviewCall2CachedMs": 275.10030000000006,
+    "zipDownloadSeconds": 1.7032685
+  },
+  "browser": {
+    "initialDashboardLoadMs": 1854.5715999999993,
+    "navBatchesMs": 105.57320000000072,
+    "navStorageMs": 416.0082000000002,
+    "revisitDashboardMs": 430.28099999999904,
+    "revisitDashboardApiCount": 1,
+    "revisitBatchesMs": 94.63429999999971,
+    "revisitBatchesApiCount": 0
+  },
+  "comparisons": {}
+}

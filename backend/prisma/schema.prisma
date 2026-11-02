@@ -1,0 +1,217 @@
+// ──────────────────────────────────────────────────────────────
+// Material Data Management System — Prisma Schema
+// ──────────────────────────────────────────────────────────────
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ── Enums ───────────────────────────────────────────────────
+
+enum UserRole {
+  admin
+  worker
+}
+
+enum BatchStatus {
+  active
+  closed
+  backup_due
+  backup_overdue
+  backup_confirmed
+  deletion_approved
+  partially_deleted
+  deleted
+}
+
+enum FileCategory {
+  microstructure
+  graph
+  source_pdf
+  whatsapp_image
+  generated_report
+}
+
+enum ProductStatus {
+  draft
+  in_progress
+  uploads_complete
+  report_generated
+  completed
+}
+
+enum BackupStatus {
+  pending
+  confirmed
+  verified
+}
+
+// ── Models ──────────────────────────────────────────────────
+
+model User {
+  id        String   @id @default(uuid()) @db.Uuid
+  email     String   @unique
+  fullName  String   @map("full_name")
+  role      UserRole @default(worker)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  batches       Batch[]        @relation("BatchCreator")
+  dateFolders   DateFolder[]   @relation("DateFolderCreator")
+  products      Product[]      @relation("ProductCreator")
+  files         ProductFile[]  @relation("FileUploader")
+  backups       BackupRecord[] @relation("BackupConfirmer")
+  downloadLogs  DownloadLog[]  @relation("Downloader")
+  auditLogs     AuditLog[]     @relation("AuditActor")
+
+  @@map("users")
+}
+
+model Batch {
+  id                 String      @id @default(uuid()) @db.Uuid
+  batchName          String      @map("batch_name")
+  description        String?
+  createdById        String      @map("created_by") @db.Uuid
+  createdAt          DateTime    @default(now()) @map("created_at")
+  closedAt           DateTime?   @map("closed_at")
+  retentionStartedAt DateTime?   @map("retention_started_at")
+  backupDueAt        DateTime?   @map("backup_due_at")
+  status             BatchStatus @default(active)
+
+  createdBy     User           @relation("BatchCreator", fields: [createdById], references: [id])
+  dateFolders   DateFolder[]
+  backupRecords BackupRecord[]
+  downloadLogs  DownloadLog[]  @relation("BatchDownloads")
+
+  @@index([status, createdAt(sort: Desc)])
+  @@map("batches")
+}
+
+model DateFolder {
+  id          String   @id @default(uuid()) @db.Uuid
+  batchId     String   @map("batch_id") @db.Uuid
+  workDate    DateTime @map("work_date") @db.Date
+  createdById String   @map("created_by") @db.Uuid
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  batch     Batch     @relation(fields: [batchId], references: [id], onDelete: Cascade)
+  createdBy User      @relation("DateFolderCreator", fields: [createdById], references: [id])
+  products  Product[]
+
+  @@unique([batchId, workDate], name: "unique_batch_date")
+  @@map("date_folders")
+}
+
+model Product {
+  id            String        @id @default(uuid()) @db.Uuid
+  dateFolderId  String        @map("date_folder_id") @db.Uuid
+  productCode   String        @map("product_code")
+  productName   String        @map("product_name")
+  metadata      Json?         @db.JsonB
+  createdById   String        @map("created_by") @db.Uuid
+  createdAt     DateTime      @default(now()) @map("created_at")
+  updatedAt     DateTime      @updatedAt @map("updated_at")
+  status        ProductStatus @default(draft)
+
+  dateFolder   DateFolder    @relation(fields: [dateFolderId], references: [id], onDelete: Cascade)
+  createdBy    User          @relation("ProductCreator", fields: [createdById], references: [id])
+  files        ProductFile[]
+  downloadLogs DownloadLog[] @relation("ProductDownloads")
+
+  @@unique([dateFolderId, productCode], name: "unique_date_product_code")
+  @@map("products")
+}
+
+model ProductFile {
+  id               String       @id @default(uuid()) @db.Uuid
+  productId        String       @map("product_id") @db.Uuid
+  category         FileCategory
+  slotIndex        Int          @default(0) @map("slot_index")
+  originalFilename String       @map("original_filename")
+  storageKey       String       @map("storage_key")
+  mimeType         String       @map("mime_type")
+  fileSize         BigInt       @map("file_size")
+  checksumSha256   String?      @map("checksum_sha256")
+  uploadedById     String       @map("uploaded_by") @db.Uuid
+  uploadedAt       DateTime     @default(now()) @map("uploaded_at")
+  deletedAt        DateTime?    @map("deleted_at")
+  isLatest         Boolean      @default(true) @map("is_latest")
+  uploadStatus     String       @default("pending") @map("upload_status") // pending, confirmed, failed
+
+  product    Product @relation(fields: [productId], references: [id], onDelete: Cascade)
+  uploadedBy User    @relation("FileUploader", fields: [uploadedById], references: [id])
+
+  @@index([productId, category, slotIndex])
+  @@index([storageKey])
+  @@index([deletedAt, uploadStatus])
+  @@map("product_files")
+}
+
+model BackupRecord {
+  id              String       @id @default(uuid()) @db.Uuid
+  batchId         String       @map("batch_id") @db.Uuid
+  confirmedById   String       @map("confirmed_by") @db.Uuid
+  confirmedAt     DateTime     @default(now()) @map("confirmed_at")
+  diskIdentifier  String?      @map("disk_identifier")
+  destinationPath String?      @map("destination_path")
+  archiveFilename String?      @map("archive_filename")
+  archiveChecksum String?      @map("archive_checksum")
+  notes           String?
+  status          BackupStatus @default(pending)
+
+  batch       Batch @relation(fields: [batchId], references: [id])
+  confirmedBy User  @relation("BackupConfirmer", fields: [confirmedById], references: [id])
+
+  @@index([batchId, confirmedAt(sort: Desc)])
+  @@map("backup_records")
+}
+
+model DownloadLog {
+  id           String   @id @default(uuid()) @db.Uuid
+  productId    String?  @map("product_id") @db.Uuid
+  batchId      String?  @map("batch_id") @db.Uuid
+  downloadedById String @map("downloaded_by") @db.Uuid
+  downloadType String   @map("download_type") // pdf, product_zip, batch_zip
+  downloadedAt DateTime @default(now()) @map("downloaded_at")
+  filename     String?
+
+  product      Product? @relation("ProductDownloads", fields: [productId], references: [id])
+  batch        Batch?   @relation("BatchDownloads", fields: [batchId], references: [id])
+  downloadedBy User     @relation("Downloader", fields: [downloadedById], references: [id])
+
+  @@index([productId])
+  @@index([batchId])
+  @@index([downloadedAt(sort: Desc)])
+  @@map("download_logs")
+}
+
+model AuditLog {
+  id         String   @id @default(uuid()) @db.Uuid
+  userId     String   @map("user_id") @db.Uuid
+  action     String
+  entityType String   @map("entity_type")
+  entityId   String?  @map("entity_id") @db.Uuid
+  details    Json?    @db.JsonB
+  createdAt  DateTime @default(now()) @map("created_at")
+
+  user User @relation("AuditActor", fields: [userId], references: [id])
+
+  @@index([entityType, entityId])
+  @@index([userId])
+  @@index([createdAt])
+  @@map("audit_logs")
+}
+
+model AppSetting {
+  id        String   @id @default(uuid()) @db.Uuid
+  key       String   @unique
+  value     Json     @db.JsonB
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("app_settings")
+}

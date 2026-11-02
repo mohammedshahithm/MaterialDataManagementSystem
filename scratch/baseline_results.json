@@ -1,0 +1,27 @@
+{
+  "timestamp": "2026-11-02T07:54:22.867Z",
+  "network": {
+    "dbTcpLatencyMs": 51.79969999999995,
+    "storageTcpLatencyMs": 19.15803333333334
+  },
+  "api": {
+    "healthMs": 8.889300000000011,
+    "dashboardMs": 609.2166333333334,
+    "batchesMs": 129.8190333333332,
+    "storageSummaryMs": 328.31919999999974,
+    "retentionSettingsMs": 57.72449999999935,
+    "auditLogsMs": 275.2533000000003
+  },
+  "browser": {
+    "initialDashboardLoadMs": 2173.6152999999995,
+    "initialDashboardApiCount": 2,
+    "navBatchesMs": 113.1226999999999,
+    "navBatchesApiCount": 0,
+    "navStorageMs": 466.8265000000001,
+    "navStorageApiCount": 2,
+    "revisitDashboardMs": 137.78980000000047,
+    "revisitDashboardApiCount": 4,
+    "revisitBatchesMs": 69.29440000000068,
+    "revisitBatchesApiCount": 2
+  }
+}
