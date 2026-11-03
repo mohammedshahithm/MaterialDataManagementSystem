@@ -12,7 +12,6 @@ import { archiveController } from '../controllers/archiveController';
 import { backupController } from '../controllers/backupController';
 import { storageController } from '../controllers/storageController';
 import { adminController } from '../controllers/adminController';
-import { runRetentionCheck } from '../jobs/retentionJob';
 
 const router = Router();
 
@@ -56,22 +55,6 @@ const upload = multer({
 // ── Public System Endpoints ─────────────────────────────────
 router.get('/health', (_req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
-});
-
-// Scheduled retention check trigger (Vercel Cron / external scheduler)
-router.get('/cron/retention', async (req, res, next) => {
-  try {
-    // Optional Vercel CRON_SECRET verification
-    const authHeader = req.headers.authorization;
-    if (process.env.CRON_SECRET && authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
-      return res.status(401).json({ error: 'Unauthorized: Invalid CRON_SECRET' });
-    }
-
-    await runRetentionCheck();
-    return res.json({ status: 'ok', message: 'Retention check completed' });
-  } catch (err) {
-    next(err);
-  }
 });
 
 // ── Auth endpoints ───────────────────────────────────────────

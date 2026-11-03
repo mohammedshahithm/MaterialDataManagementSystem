@@ -112,12 +112,23 @@ export const backupController = {
         throw new AppError('Batch files have already been deleted from cloud storage', 400);
       }
 
-      // Prevent deletion if any file upload or report generation is in progress
+      // Prevent deletion if any file upload or report generation is currently active in the last hour
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      await prisma.productFile.updateMany({
+        where: {
+          product: { dateFolder: { batchId } },
+          uploadStatus: 'pending',
+          uploadedAt: { lt: oneHourAgo },
+        },
+        data: { uploadStatus: 'failed' },
+      });
+
       const pendingFiles = await prisma.productFile.findFirst({
         where: {
           product: { dateFolder: { batchId } },
           deletedAt: null,
           uploadStatus: 'pending',
+          uploadedAt: { gte: oneHourAgo },
         },
       });
       if (pendingFiles) {

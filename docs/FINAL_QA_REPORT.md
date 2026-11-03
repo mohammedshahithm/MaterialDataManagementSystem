@@ -207,7 +207,7 @@ dist/assets/vendor-react-Y8Y7HoJR.js       242.09 kB │ gzip: 76.42 kB
 
 1. **Database Preservation:** All genuine client company data (`BATCH-01`, existing products, inspection test runs) was strictly preserved. Zero tables or schemas were dropped or truncated.
 2. **Private Network Boundary:** Shared Factory Terminal mode is guarded by origin checks, rate-limiting, and Vercel IP access restrictions.
-3. **No Automatic Destructive Deletions:** The retention cron job (`/api/cron/retention`) only calculates inactivity and flags batches as eligible for deletion; it never deletes records or storage objects.
+3. **No Automatic Destructive Deletions:** Inactivity retention is evaluated dynamically in real time and flags batches as eligible for manual deletion; the application never automatically deletes records or cloud storage objects. Manual deletion requires explicit operator confirmation.
 4. **Clean Windows File Explorer Extraction:** No files or folders contain reserved Windows characters (`\ / : * ? " < > |`), preventing extraction warnings or errors.
 
 ---

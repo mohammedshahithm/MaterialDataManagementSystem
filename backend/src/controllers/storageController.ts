@@ -8,6 +8,18 @@ export const storageController = {
   /** Get storage summary */
   async getSummary(req: Request, res: Response, next: NextFunction) {
     try {
+      // Passive maintenance: asynchronously mark abandoned pending uploads older than 1 hour as failed
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      prisma.productFile
+        .updateMany({
+          where: {
+            uploadStatus: 'pending',
+            uploadedAt: { lt: oneHourAgo },
+          },
+          data: { uploadStatus: 'failed' },
+        })
+        .catch(() => {});
+
       const [activeFiles, batches, failedUploads, pendingDeletions, runtimeSettings] = await Promise.all([
         prisma.productFile.aggregate({
           where: { deletedAt: null, uploadStatus: 'confirmed' },

@@ -7,7 +7,6 @@ import { config } from './config';
 import routes from './routes';
 import { errorHandler } from './middleware/errorHandler';
 import { enforcePrivateNetwork } from './middleware/networkSecurity';
-import { startRetentionJob } from './jobs/retentionJob';
 
 // Global BigInt JSON serialization support
 (BigInt.prototype as any).toJSON = function () {
@@ -128,22 +127,9 @@ if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
     console.log(`\n🚀 MDMS Backend running on http://localhost:${PORT}`);
     console.log(`   Frontend URL: ${config.frontendUrl}`);
     console.log(`   Environment: ${process.env.NODE_ENV || 'development'}\n`);
-
-    // Start background jobs with cluster awareness and distributed lock
-    const shouldRunScheduler =
-      process.env.ENABLE_RETENTION_SCHEDULER === 'true' ||
-      (process.env.ENABLE_RETENTION_SCHEDULER !== 'false' &&
-        (process.env.NODE_APP_INSTANCE === undefined || process.env.NODE_APP_INSTANCE === '0'));
-
-    if (shouldRunScheduler) {
-      startRetentionJob();
-    } else {
-      console.log('ℹ️ Retention scheduler disabled on this cluster instance (Standby)');
-    }
   });
 } else {
-  // Serverless execution (Vercel Functions): persistent node-cron is disabled.
-  // Scheduled retention checks are triggered via Vercel Cron at /api/cron/retention.
+  // Serverless execution (Vercel Functions): dynamic real-time retention evaluation (no background cron needed)
   console.log('⚡ MDMS Backend initialized in Vercel Serverless Function mode');
 }
 

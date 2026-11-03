@@ -18,7 +18,7 @@ The table below outlines the actionable steps remaining before final DNS cutover
 | :--- | :--- | :---: | :--- | :--- |
 | **Vercel Project Setup** | DevOps | **Pending User Action** | DevOps Engineer | Push repository to Git (GitHub/GitLab) and import project into Vercel. |
 | **Vercel Environment Variables** | Configuration | **Pending User Action** | DevOps / System Admin | Configure required backend & frontend environment variables in Vercel project settings. |
-| **Vercel Cron Verification** | Background Scheduling | **Ready** | DevOps Engineer | Verify `/api/cron/retention` appears under Project Settings -> Cron Jobs (runs `0 * * * *`). |
+| **Dynamic Retention & Manual Deletion** | Compliance | **Verified** | QA / System Admin | Retention eligibility is evaluated dynamically in real time (5 days inactive). Batches are never automatically deleted; manual deletion requires explicit confirmation. |
 | **Supabase IP & Network Whitelist** | Database Security | **Pending User Action** | Database Administrator | Ensure Supabase database allows connections from Vercel Serverless Functions. |
 | **Corporate Domain & DNS Cutover** | Infrastructure | **Pending User Action** | Corporate IT / Network Admin | Add DNS records (`CNAME` / `A`) pointing company domain to Vercel edge network. |
 | **Factory Network Access Restriction** | Network Perimeter | **Pending User Action** | Network Administrator | Configure Vercel IP Allowlist or corporate firewall so only approved factory devices access the system. |
@@ -63,7 +63,6 @@ Under **Project Settings** -> **Environment Variables**, configure the following
 | `SUPABASE_SERVICE_ROLE_KEY` | Backend | `[Secret service_role key]` (bypasses RLS for storage management) |
 | `SUPABASE_ANON_KEY` | Backend | `[Publishable anon key]` |
 | `SUPABASE_STORAGE_BUCKET` | Backend | `material-data` (default) |
-| `CRON_SECRET` | Backend | `[Secure random string for Vercel Cron authentication]` |
 | `FRONTEND_URL` | Backend | `https://[your-company-domain.com]` (allowed CORS origin) |
 | `RETENTION_DAYS` | Backend | `5` |
 | `MAX_FILE_SIZE_MB` | Backend | `25` |
@@ -75,12 +74,12 @@ Under **Project Settings** -> **Environment Variables**, configure the following
 
 ---
 
-### Step 4: Verify Vercel Cron Scheduling
-1. Once deployed, open **Settings** -> **Cron Jobs**.
-2. Confirm the hourly retention check is active:
-   - **Path:** `/api/cron/retention`
-   - **Schedule:** `0 * * * *` (hourly at minute 0)
-3. This endpoint runs the inactivity retention evaluation with PostgreSQL distributed locking (`pg_try_advisory_lock`), guaranteeing safe single execution without destructive automated deletions.
+### Step 4: Verify Dynamic Retention & Manual Deletion
+1. MDMS calculates retention eligibility dynamically in real-time whenever batches are viewed.
+2. Inactive batches (no new products or files for 5 days) display an amber "Eligible for Deletion" badge in the UI.
+3. The system **NEVER automatically deletes batches or cloud files**.
+4. Operators manually delete eligible batches through the explicit confirmation dialog, which preserves all download history and audit logs.
+5. No Vercel cron jobs or external schedulers are configured, ensuring 100% compatibility with both Vercel Hobby and Pro plans.
 
 ---
 

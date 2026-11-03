@@ -396,12 +396,6 @@ MDMS is pre-configured for modern Vercel multi-service deployment with an Expres
   "rewrites": [
     { "source": "/api/(.*)", "destination": "backend" },
     { "source": "/(.*)", "destination": "frontend" }
-  ],
-  "crons": [
-    {
-      "path": "/api/cron/retention",
-      "schedule": "0 * * * *"
-    }
   ]
 }
 ```
@@ -409,10 +403,10 @@ MDMS is pre-configured for modern Vercel multi-service deployment with an Expres
 #### Key Serverless Architectural Features:
 1. **Serverless Entrypoint Compatibility:**
    - In `backend/src/server.ts`, `app.listen()` is guarded by `if (!process.env.VERCEL)`. Under Vercel, the Express app is exported directly (`export default app`) for serverless function execution.
-   - Persistent `node-cron` is disabled in serverless mode.
-2. **Automated Vercel Cron Scheduling:**
-   - The retention calculation job runs hourly via Vercel Cron at `/api/cron/retention` (`0 * * * *`).
-   - Uses PostgreSQL advisory lock (`pg_try_advisory_lock`) to guarantee single execution.
+2. **Dynamic Real-Time Inactivity & Retention Evaluation (No Cron Needed):**
+   - Batch retention eligibility (5 days of inactivity) is calculated dynamically in real-time on every query based on the latest activity timestamp (product creation, file upload, or file modification).
+   - Batches are **NEVER automatically deleted**. Manual deletion is triggered by operators via explicit confirmation.
+   - Because calculation is dynamic and deletion is manual, **no background cron jobs or external schedulers are required**, ensuring 100% compatibility with the Vercel Hobby plan (which restricts cron schedules).
 3. **Frontend SPA Catch-All Rewrites:**
    - `frontend/vercel.json` routes all client paths (`/(.*)`) to `/index.html`, preventing 404 errors on browser page reloads.
 4. **Production API Base Routing:**
@@ -527,25 +521,14 @@ sudo systemctl reload nginx
 
 ---
 
-## 8. Background Jobs & Retention Automation
+## 8. Retention Lifecycle & Storage Maintenance
 
-### 8.1 Automated Cron Lifecycle
-The backend includes an integrated cron scheduler (`node-cron`) running in `backend/src/jobs/retentionJob.ts`:
-- **Execution Frequency:** Hourly (`0 * * * *`).
-- **Core Operations:**
-  1. Monitors closed batches that have exceeded `RETENTION_DAYS` (default: 5 days) and logs storage cleanup eligibility.
-  2. Purges stale multipart uploads or broken temporary files that have remained pending for >1 hour (`uploadStatus: 'failed'`).
-  3. Uses a PostgreSQL distributed advisory lock (`pg_try_advisory_lock(882736192)`) ensuring idempotency across clustered instances.
-
-### 8.2 Verifying Worker Health
-Operators can check retention worker execution in real-time:
-```bash
-# PM2 Logs
-pm2 logs mdms-backend --lines 50 | grep -E "(Retention|Cron)"
-
-# Systemd Logs
-journalctl -u mdms-backend -n 50 --no-pager | grep -E "(Retention|Cron)"
-```
+### 8.1 Real-Time Dynamic Retention Evaluation
+MDMS computes batch retention status dynamically in real-time without relying on scheduled background daemons:
+- **Calculation Mechanism:** Whenever batches or details are retrieved, `evaluateBatchRetention` calculates the exact inactivity duration from the batch's last activity (latest product creation, file upload, or file deletion).
+- **Deletion Policy:** When a batch has been inactive for 5 or more days, it is marked as `isEligibleForDeletion: true` and an expiry warning badge is displayed in Batch Management.
+- **Zero Automatic Deletion:** The system **NEVER automatically deletes batches or cloud files**. Batches can only be deleted manually by operators via an explicit confirmation dialog.
+- **Passive Maintenance:** Stale pending uploads older than 1 hour and expired temporary ZIP archives older than 2 hours are cleaned up passively during storage summary or archive requests without requiring background timers.
 
 ---
 

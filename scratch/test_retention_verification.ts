@@ -2,7 +2,6 @@ import { chromium } from '../frontend/node_modules/playwright';
 import { PrismaClient } from '../backend/node_modules/@prisma/client';
 import { subDays, addDays } from 'date-fns';
 import { evaluateBatchRetention, calculateBatchLastActivity } from '../backend/src/services/retentionService';
-import { runRetentionCheck } from '../backend/src/jobs/retentionJob';
 
 const prisma = new PrismaClient();
 const BACKEND_URL = 'http://localhost:3001';
@@ -216,14 +215,15 @@ async function main() {
       },
     });
 
-    // Run the scheduled retention check
-    console.log('Running runRetentionCheck()...');
-    await runRetentionCheck();
+    // Verify candidateBatch retention eligibility is evaluated dynamically in real time
+    const evaluatedStatus = evaluateBatchRetention(candidateBatch, 5);
+    assert(evaluatedStatus.isEligibleForDeletion === true, 'Batch dynamically marked eligible for deletion (inactive >= 5 days)');
+    assert(evaluatedStatus.inactivityDays >= 7, `Inactivity calculated as ${evaluatedStatus.inactivityDays} days`);
 
-    // Verify candidateBatch STILL exists in DB and is NOT deleted!
-    const batchAfterCron = await prisma.batch.findUnique({ where: { id: candidateBatch.id } });
-    assert(Boolean(batchAfterCron), 'Batch still exists in database after retention cron execution');
-    assert(batchAfterCron?.status === 'active', 'Batch status remains active (NOT automatically deleted)', `Got ${batchAfterCron?.status}`);
+    // Verify candidateBatch STILL exists in DB and is NOT automatically deleted!
+    const batchAfterEval = await prisma.batch.findUnique({ where: { id: candidateBatch.id } });
+    assert(Boolean(batchAfterEval), 'Batch still exists in database (NO automated destructive deletion)');
+    assert(batchAfterEval?.status === 'active', 'Batch status remains active (NOT automatically deleted)', `Got ${batchAfterEval?.status}`);
 
     // ----------------------------------------------------
     // CHECK 8: Manual Deletion via Explicit Confirmation Dialog

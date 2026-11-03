@@ -258,6 +258,9 @@ export const archiveController = {
       await storageService.uploadFile(tempKey, zipBuffer, 'application/zip');
       const downloadUrl = await storageService.getSignedUrl(tempKey, 3600, { download: zipFilename });
 
+      // Passive cleanup of expired temp archives (>2 hours) without blocking response
+      storageService.cleanupTempArchives().catch(() => {});
+
       try {
         await prisma.downloadLog.create({
           data: {
@@ -465,6 +468,9 @@ export const archiveController = {
 
       await storageService.uploadFile(tempKey, zipBuffer, 'application/zip');
       const downloadUrl = await storageService.getSignedUrl(tempKey, 3600, { download: zipFilename });
+
+      // Passive cleanup of expired temp archives (>2 hours) without blocking response
+      storageService.cleanupTempArchives().catch(() => {});
 
       try {
         await prisma.downloadLog.create({

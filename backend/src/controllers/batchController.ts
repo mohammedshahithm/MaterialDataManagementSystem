@@ -334,12 +334,23 @@ export const batchController = {
       if (!batch) throw new AppError('Batch not found', 404);
       if (batch.status === 'deleted') throw new AppError('Batch has already been deleted', 400);
 
-      // Check pending uploads
+      // Check active pending uploads within the last hour; mark older stale uploads as failed
+      const oneHourAgo = new Date(Date.now() - 60 * 60 * 1000);
+      await prisma.productFile.updateMany({
+        where: {
+          product: { dateFolder: { batchId: id } },
+          uploadStatus: 'pending',
+          uploadedAt: { lt: oneHourAgo },
+        },
+        data: { uploadStatus: 'failed' },
+      });
+
       const pendingFiles = await prisma.productFile.findFirst({
         where: {
           product: { dateFolder: { batchId: id } },
           deletedAt: null,
           uploadStatus: 'pending',
+          uploadedAt: { gte: oneHourAgo },
         },
       });
       if (pendingFiles) {
