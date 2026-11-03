@@ -94,6 +94,102 @@ export const storageService = {
     return data.signedUrl;
   },
 
+  /**
+   * Create a Supabase signed upload URL.
+   * This authorizes the client browser to upload directly to Supabase Storage via PUT.
+   */
+  async createSignedUploadUrl(
+    key: string
+  ): Promise<{ signedUrl: string; path: string; token: string }> {
+    const { data, error } = await bucket().createSignedUploadUrl(key, {
+      upsert: false,
+    });
+    if (error || !data) {
+      throw new Error(`Failed to create signed upload URL: ${error?.message || 'Unknown error'}`);
+    }
+    return {
+      signedUrl: data.signedUrl,
+      path: data.path,
+      token: data.token,
+    };
+  },
+
+  /**
+   * Memory-efficient object header inspection.
+   * Fetches only the first 1024 bytes (Range: bytes=0-1023) directly from Supabase Storage
+   * to verify object presence, determine exact total size from Content-Range, and inspect
+   * magic bytes without loading large 25MB binaries into RAM.
+   */
+  async fetchObjectHeader(
+    key: string
+  ): Promise<{
+    exists: boolean;
+    buffer: Buffer;
+    size: number;
+    contentType: string;
+  }> {
+    try {
+      const { data, error } = await bucket().createSignedUrl(key, 60);
+      if (error || !data?.signedUrl) {
+        return { exists: false, buffer: Buffer.alloc(0), size: 0, contentType: '' };
+      }
+
+      const res = await fetch(data.signedUrl, {
+        headers: { Range: 'bytes=0-1023' },
+      });
+
+      if (!res.ok && res.status !== 206) {
+        return { exists: false, buffer: Buffer.alloc(0), size: 0, contentType: '' };
+      }
+
+      const arrayBuf = await res.arrayBuffer();
+      const buffer = Buffer.from(arrayBuf);
+
+      // Parse total byte count from Content-Range header: "bytes 0-1023/2423462"
+      const contentRange = res.headers.get('content-range');
+      let size = buffer.length;
+      if (contentRange) {
+        const parts = contentRange.split('/');
+        if (parts[1]) {
+          const parsed = parseInt(parts[1], 10);
+          if (!isNaN(parsed) && parsed > 0) size = parsed;
+        }
+      }
+      const contentType = res.headers.get('content-type') || 'application/octet-stream';
+
+      return { exists: true, buffer, size, contentType };
+    } catch {
+      return { exists: false, buffer: Buffer.alloc(0), size: 0, contentType: '' };
+    }
+  },
+
+  /**
+   * Clean up temporary archives generated in _temp_archives folder older than specified age.
+   */
+  async cleanupTempArchives(olderThanMs: number = 2 * 60 * 60 * 1000): Promise<number> {
+    try {
+      const { data, error } = await bucket().list('_temp_archives', { limit: 100 });
+      if (error || !data) return 0;
+
+      const cutoff = new Date(Date.now() - olderThanMs);
+      const toDelete: string[] = [];
+
+      for (const item of data) {
+        if (item.name && item.created_at && new Date(item.created_at) < cutoff) {
+          toDelete.push(`_temp_archives/${item.name}`);
+        }
+      }
+
+      if (toDelete.length > 0) {
+        await bucket().remove(toDelete);
+      }
+      return toDelete.length;
+    } catch (err) {
+      console.warn('[STORAGE] Cleanup temp archives failed:', err);
+      return 0;
+    }
+  },
+
   // ── Metadata / Existence ────────────────────────────────────
 
   /**

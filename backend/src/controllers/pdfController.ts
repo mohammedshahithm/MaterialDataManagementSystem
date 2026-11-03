@@ -509,7 +509,7 @@ export const pdfController = {
     }
   },
 
-  /** Download report — stream PDF file and log on response finish */
+  /** Download report — redirect to signed Supabase Storage URL (bypasses Vercel 4.5MB response limit) */
   async downloadReport(req: Request, res: Response, next: NextFunction) {
     try {
       const { productId } = req.params;
@@ -526,31 +526,41 @@ export const pdfController = {
 
       if (!report) throw new AppError('No report found', 404);
 
-      const buffer = await storageService.downloadFile(report.storageKey);
-
-      res.setHeader('Content-Type', 'application/pdf');
-      res.setHeader('Content-Disposition', `attachment; filename="${report.originalFilename}"`);
-      res.setHeader('Content-Length', buffer.length);
-
-      res.on('finish', async () => {
-        try {
-          await prisma.downloadLog.create({
-            data: {
-              productId,
-              downloadedById: userId,
-              downloadType: 'report_pdf',
-              filename: report.originalFilename,
-            },
-          });
-          await logAudit(userId, 'DOWNLOAD_REPORT_PDF', 'product', productId, {
+      // Log download initiation
+      try {
+        await prisma.downloadLog.create({
+          data: {
+            productId,
+            downloadedById: userId,
+            downloadType: 'report_pdf',
             filename: report.originalFilename,
-          });
-        } catch (logErr) {
-          console.error('Failed to log report download on finish:', logErr);
-        }
-      });
+          },
+        });
+        await logAudit(userId, 'DOWNLOAD_REPORT_PDF', 'product', productId, {
+          filename: report.originalFilename,
+        });
+      } catch (logErr) {
+        console.error('Failed to log report download:', logErr);
+      }
 
-      res.send(buffer);
+      // Generate authorized signed download URL directly from Supabase Storage
+      const downloadUrl = await storageService.getSignedUrl(
+        report.storageKey,
+        config.app.signedUrlExpiry,
+        { download: report.originalFilename }
+      );
+
+      // If client requests JSON
+      if (req.headers.accept?.includes('application/json') || req.query.json === 'true') {
+        return res.json({
+          downloadUrl,
+          filename: report.originalFilename,
+          size: report.fileSize.toString(),
+        });
+      }
+
+      // Redirect client directly to Supabase Storage signed URL (bypasses 4.5MB Vercel limit)
+      return res.redirect(downloadUrl);
     } catch (err) {
       if (!res.headersSent) next(err);
     }

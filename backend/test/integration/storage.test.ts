@@ -53,4 +53,30 @@ describe('Supabase Storage Integration Tests', () => {
     const check = await storageService.fileExists(testStorageKey);
     expect(check.exists).toBe(false);
   });
+
+  it('generates a signed upload URL and accepts direct PUT upload', async () => {
+    const directKey = `qa-test-folder/${testRunId}/direct-put-test.png`;
+    const signedUpload = await storageService.createSignedUploadUrl(directKey);
+
+    expect(signedUpload.signedUrl).toContain('http');
+    expect(signedUpload.signedUrl).toContain('token=');
+    expect(signedUpload.path).toBe(directKey);
+
+    // Perform direct client PUT upload
+    const putRes = await fetch(signedUpload.signedUrl, {
+      method: 'PUT',
+      body: dummyContent,
+      headers: { 'Content-Type': 'image/png' },
+    });
+    expect(putRes.ok).toBe(true);
+
+    // Verify object presence and header inspection
+    const header = await storageService.fetchObjectHeader(directKey);
+    expect(header.exists).toBe(true);
+    expect(header.size).toBe(dummyContent.length);
+    expect(header.buffer.subarray(0, 8).equals(Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]))).toBe(true);
+
+    // Cleanup
+    await storageService.deleteFile(directKey);
+  });
 });

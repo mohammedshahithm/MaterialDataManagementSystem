@@ -2,6 +2,7 @@ import { Request, Response, NextFunction } from 'express';
 import archiver from 'archiver';
 import path from 'path';
 import { createHash } from 'crypto';
+import { v4 as uuidv4 } from 'uuid';
 import prisma from '../config/database';
 import { storageService } from '../services/storageService';
 import { logAudit } from '../services/auditService';
@@ -153,14 +154,9 @@ export const archiveController = {
       const zipFilename = `${sanitizedProductCode}.zip`;
       const workDate = format(product.dateFolder.workDate, 'dd-MM-yyyy');
 
-      res.setHeader('Content-Type', 'application/zip');
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${zipFilename}"; filename*=UTF-8''${encodeURIComponent(zipFilename)}`
-      );
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-
       const archive = archiver('zip', { zlib: { level: 6 } });
+      const zipChunks: Buffer[] = [];
+      archive.on('data', (chunk: Buffer) => zipChunks.push(chunk));
       archive.on('error', (err) => {
         console.error('Product archive error:', err);
         if (!res.headersSent) {
@@ -169,7 +165,6 @@ export const archiveController = {
           res.end();
         }
       });
-      archive.pipe(res);
 
       const manifest: any = {
         batchId: product.dateFolder.batch.id,
@@ -255,26 +250,37 @@ export const archiveController = {
         name: `${sanitizedProductCode}/manifest.json`,
       });
 
-      res.on('finish', async () => {
-        try {
-          await prisma.downloadLog.create({
-            data: {
-              productId,
-              downloadedById: userId,
-              downloadType: 'product_zip',
-              filename: zipFilename,
-            },
-          });
-          await logAudit(userId, 'DOWNLOAD_PRODUCT_ZIP', 'product', productId, {
-            filename: zipFilename,
-            totalFiles: manifest.files.length,
-          });
-        } catch (logErr) {
-          console.error('Failed to log product zip download on finish:', logErr);
-        }
-      });
-
       await archive.finalize();
+
+      const zipBuffer = Buffer.concat(zipChunks);
+      const tempKey = `_temp_archives/${uuidv4()}-${zipFilename}`;
+
+      await storageService.uploadFile(tempKey, zipBuffer, 'application/zip');
+      const downloadUrl = await storageService.getSignedUrl(tempKey, 3600, { download: zipFilename });
+
+      try {
+        await prisma.downloadLog.create({
+          data: {
+            productId,
+            downloadedById: userId,
+            downloadType: 'product_zip',
+            filename: zipFilename,
+          },
+        });
+        await logAudit(userId, 'DOWNLOAD_PRODUCT_ZIP', 'product', productId, {
+          filename: zipFilename,
+          totalFiles: manifest.files.length,
+          size: zipBuffer.length,
+        });
+      } catch (logErr) {
+        console.error('Failed to log product zip download:', logErr);
+      }
+
+      if (req.headers.accept?.includes('application/json') || req.query.json === 'true') {
+        return res.json({ downloadUrl, filename: zipFilename, size: zipBuffer.length });
+      }
+
+      return res.redirect(downloadUrl);
     } catch (err) {
       if (!res.headersSent) next(err);
     }
@@ -311,14 +317,9 @@ export const archiveController = {
       const sanitizedBatchName = sanitizeWindowsFilename(batch.batchName);
       const zipFilename = `${sanitizedBatchName}.zip`;
 
-      res.setHeader('Content-Type', 'application/zip');
-      res.setHeader(
-        'Content-Disposition',
-        `attachment; filename="${zipFilename}"; filename*=UTF-8''${encodeURIComponent(zipFilename)}`
-      );
-      res.setHeader('Cache-Control', 'no-cache, no-store, must-revalidate');
-
       const archive = archiver('zip', { zlib: { level: 6 } });
+      const zipChunks: Buffer[] = [];
+      archive.on('data', (chunk: Buffer) => zipChunks.push(chunk));
       archive.on('error', (err) => {
         console.error('Batch archive error:', err);
         if (!res.headersSent) {
@@ -327,7 +328,6 @@ export const archiveController = {
           res.end();
         }
       });
-      archive.pipe(res);
 
       const batchManifest: any = {
         batchId: batch.id,
@@ -458,28 +458,39 @@ export const archiveController = {
         .update(JSON.stringify(batchManifest))
         .digest('hex');
 
-      res.on('finish', async () => {
-        try {
-          await prisma.downloadLog.create({
-            data: {
-              batchId,
-              downloadedById: userId,
-              downloadType: 'batch_zip',
-              filename: zipFilename,
-            },
-          });
-          await logAudit(userId, 'DOWNLOAD_BATCH_ZIP', 'batch', batchId, {
-            filename: zipFilename,
-            totalProducts: batchManifest.products.length,
-            totalFiles: allBatchFiles.length,
-            checksum: checksumHash,
-          });
-        } catch (logErr) {
-          console.error('Failed to log batch zip download on finish:', logErr);
-        }
-      });
-
       await archive.finalize();
+
+      const zipBuffer = Buffer.concat(zipChunks);
+      const tempKey = `_temp_archives/${uuidv4()}-${zipFilename}`;
+
+      await storageService.uploadFile(tempKey, zipBuffer, 'application/zip');
+      const downloadUrl = await storageService.getSignedUrl(tempKey, 3600, { download: zipFilename });
+
+      try {
+        await prisma.downloadLog.create({
+          data: {
+            batchId,
+            downloadedById: userId,
+            downloadType: 'batch_zip',
+            filename: zipFilename,
+          },
+        });
+        await logAudit(userId, 'DOWNLOAD_BATCH_ZIP', 'batch', batchId, {
+          filename: zipFilename,
+          totalProducts: batchManifest.products.length,
+          totalFiles: allBatchFiles.length,
+          size: zipBuffer.length,
+          checksum: checksumHash,
+        });
+      } catch (logErr) {
+        console.error('Failed to log batch zip download:', logErr);
+      }
+
+      if (req.headers.accept?.includes('application/json') || req.query.json === 'true') {
+        return res.json({ downloadUrl, filename: zipFilename, size: zipBuffer.length });
+      }
+
+      return res.redirect(downloadUrl);
     } catch (err) {
       if (!res.headersSent) next(err);
     }

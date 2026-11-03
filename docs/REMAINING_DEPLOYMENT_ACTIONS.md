@@ -56,18 +56,22 @@ Under **Project Settings** -> **Environment Variables**, configure the following
 
 | Variable Name | Service Scope | Recommended Value / Notes |
 | :--- | :---: | :--- |
-| `NODE_ENV` | Backend | `production` |
+| `NODE_ENV` | Backend | `production` (automatically set by Vercel) |
 | `DATABASE_URL` | Backend | `postgresql://postgres.[ref]:[PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:6543/postgres?pgbouncer=true` |
-| `DIRECT_URL` | Backend | `postgresql://postgres:[PASSWORD]@db.[ref].supabase.co:5432/postgres` |
-| `SUPABASE_URL` | Backend & Frontend | `https://[project-id].supabase.co` |
-| `SUPABASE_SERVICE_ROLE_KEY` | Backend | `[Secret service_role key]` |
-| `SUPABASE_ANON_KEY` | Backend & Frontend | `[Publishable anon key]` |
-| `SUPABASE_STORAGE_BUCKET` | Backend | `material-data` |
-| `JWT_SECRET` | Backend | `[Secure random 64-character secret]` |
-| `ALLOWED_ORIGIN` | Backend | `https://[your-company-domain.com]` (or `*` for internal network) |
+| `DIRECT_URL` | Backend | `postgresql://postgres.[ref]:[PASSWORD]@aws-0-ap-southeast-1.pooler.supabase.com:5432/postgres` |
+| `SUPABASE_URL` | Backend | `https://[project-id].supabase.co` |
+| `SUPABASE_SERVICE_ROLE_KEY` | Backend | `[Secret service_role key]` (bypasses RLS for storage management) |
+| `SUPABASE_ANON_KEY` | Backend | `[Publishable anon key]` |
+| `SUPABASE_STORAGE_BUCKET` | Backend | `material-data` (default) |
 | `CRON_SECRET` | Backend | `[Secure random string for Vercel Cron authentication]` |
+| `FRONTEND_URL` | Backend | `https://[your-company-domain.com]` (allowed CORS origin) |
 | `RETENTION_DAYS` | Backend | `5` |
 | `MAX_FILE_SIZE_MB` | Backend | `25` |
+| `SIGNED_URL_EXPIRY_SECONDS` | Backend | `900` |
+| `NO_LOGIN_MODE` | Backend | `true` |
+| `VITE_API_URL` | Frontend | Leave blank or `/api` (uses relative path via Vercel rewrites) |
+| `VITE_SUPABASE_URL` | Frontend | `https://[project-id].supabase.co` |
+| `VITE_SUPABASE_ANON_KEY` | Frontend | `[Publishable anon key]` |
 
 ---
 

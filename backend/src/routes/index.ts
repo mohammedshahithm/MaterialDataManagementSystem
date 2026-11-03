@@ -106,6 +106,12 @@ router.patch('/products/:productId', productController.update);
 router.delete('/products/:productId', productController.delete);
 
 // ── File Upload & Management ─────────────────────────────────
+// Direct signed Supabase upload endpoints (bypasses Vercel 4.5MB request limit)
+router.post('/products/:productId/files/request-upload', fileController.requestUpload);
+router.post('/products/:productId/files/:fileId/confirm', fileController.confirmUpload);
+router.post('/products/:productId/files/:fileId/abort', fileController.abortUpload);
+
+// Legacy upload fallback (multipart/form-data)
 router.post('/products/:productId/files/upload', upload.single('file'), fileController.upload);
 router.get('/products/:productId/files', fileController.listByProduct);
 router.get('/files/:fileId/download-url', fileController.getDownloadUrl);

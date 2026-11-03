@@ -123,12 +123,19 @@ Supabase provides two distinct database connection interfaces:
    - `application/pdf`
 6. Click **Save**.
 
-### 3.3 Storage Access Architecture & Security Review
+### 3.3 Storage Access Architecture & Vercel Serverless Compatibility Review
+- **Direct Supabase Signed Uploads (Bypassing Vercel 4.5MB Payload Limit):**
+  - Vercel Functions enforce a hard 4.5 MB request and response body limit.
+  - Files are uploaded directly from the client browser to Supabase Storage via `uploadToSignedUrl()` using short-lived signed upload tokens created by the backend (`createSignedUploadUrl()`).
+  - The 25 MB binary payload never passes through a Vercel Function request body.
+- **Memory-Efficient Range-Based Verification:**
+  - Upon upload completion, the backend verifies the uploaded object by requesting only the first 1024 bytes (`Range: bytes=0-1023`).
+  - Total size is validated via `Content-Range`, and file signatures / magic bytes are verified without buffering large binaries into RAM.
+- **Large Artifact Downloads via Signed Redirect URLs:**
+  - Generated inspection PDFs and ZIP archives exceeding 4.5 MB are stored in Supabase Storage.
+  - Download endpoints issue HTTP 302 redirects to authorized signed URLs, downloading directly from Supabase CDN and bypassing Vercel's 4.5 MB response payload limit.
 - **Private Bucket Isolation:** Because `material-data` is marked Private, unauthenticated direct HTTP GET requests to files are rejected by Supabase Storage gateway with 400 Bad Request or 404 Not Found.
-- **Backend Service Role Proxy:** All file uploads, deletions, and pre-signed URL generations are performed exclusively by the backend Express server using `SUPABASE_SERVICE_ROLE_KEY`.
-- **Shared Terminal Access Control:** All connected users on the approved internal network have full capability to upload files, generate reports, download archives, and perform safe cloud storage cleanup.
-- **Short-Lived Signed URLs & Streamed Downloads:** File previews utilize signed tokens with a strict 15-minute expiration (`SIGNED_URL_EXPIRY_SECONDS=900`), while report PDFs and ZIP archives are streamed directly from backend with atomic download logging on socket finish (`res.on('finish')`).
-- **Policy Notice:** Do NOT apply blanket `Deny Public Access` SQL policies with `USING (false)` on `storage.objects`, as this can inadvertently block signed URL token validation in certain Supabase gateway versions. Private bucket status natively enforces confidentiality.
+- **Backend Service Role Exclusivity:** `SUPABASE_SERVICE_ROLE_KEY` remains strictly on the backend. Client browsers only hold temporary, scoped signed upload/download tokens.
 
 ### 3.4 Shared Factory Terminal Architecture & Deletion Safeguards
 

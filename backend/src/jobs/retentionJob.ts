@@ -2,6 +2,7 @@ import cron from 'node-cron';
 import prisma from '../config/database';
 import { getRuntimeSettings } from '../services/settingsService';
 import { evaluateBatchRetention } from '../services/retentionService';
+import { storageService } from '../services/storageService';
 
 const RETENTION_ADVISORY_LOCK_ID = 882736192; // 32-bit unique identifier for MDMS retention lock
 
@@ -43,7 +44,13 @@ export async function runRetentionCheck(): Promise<void> {
       console.log(`[CRON] Marked ${cleaned.count} stale pending uploads as failed`);
     }
 
-    // 2. Inspect active batches for inactivity retention eligibility
+    // 2. Clean up temporary ZIP archives older than 2 hours
+    const deletedArchives = await storageService.cleanupTempArchives(2 * 60 * 60 * 1000);
+    if (deletedArchives > 0) {
+      console.log(`[CRON] Cleaned up ${deletedArchives} expired temporary ZIP archive(s) from storage`);
+    }
+
+    // 3. Inspect active batches for inactivity retention eligibility
     const runtime = await getRuntimeSettings();
     const retentionDays = runtime.retentionDays || 5;
 

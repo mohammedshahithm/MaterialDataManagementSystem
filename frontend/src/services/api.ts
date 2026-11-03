@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { supabase } from './supabase';
 import type {
   Batch, BatchDetail, DateFolder, DateFolderDetail,
   Product, ProductDetail, ProductFile, DashboardSummary,
@@ -215,8 +216,50 @@ export const deleteFile = async (fileId: string) => {
   return res.data;
 };
 
-// ── Upload helper: full flow ─────────────────────────────────
+// ── Direct Signed Upload Workflow (Bypasses Vercel 4.5MB Payload Limit) ──
 
+export interface RequestUploadResponse {
+  fileId: string;
+  storageKey: string;
+  signedUrl: string;
+  path: string;
+  token: string;
+  bucket: string;
+}
+
+export const requestUploadUrl = async (
+  productId: string,
+  data: {
+    category: string;
+    slotIndex: number;
+    filename: string;
+    fileSize: number;
+    mimeType: string;
+  }
+): Promise<RequestUploadResponse> => {
+  const res = await api.post(`/products/${productId}/files/request-upload`, data);
+  return res.data;
+};
+
+export const confirmUpload = async (
+  productId: string,
+  fileId: string
+): Promise<{ success: boolean; message: string; fileId: string }> => {
+  const res = await api.post(`/products/${productId}/files/${fileId}/confirm`);
+  return res.data;
+};
+
+export const abortUpload = async (productId: string, fileId: string): Promise<void> => {
+  try {
+    await api.post(`/products/${productId}/files/${fileId}/abort`);
+  } catch {}
+};
+
+/**
+ * Upload file directly to Supabase Storage using server-signed authorization.
+ * The 25MB binary travels directly from the browser to Supabase Storage,
+ * completely bypassing Vercel Functions and their 4.5MB payload limit.
+ */
 export async function uploadFile(
   productId: string,
   file: File,
@@ -224,23 +267,64 @@ export async function uploadFile(
   slotIndex: number = 0,
   onProgress?: (percent: number) => void
 ): Promise<void> {
-  const formData = new FormData();
-  formData.append('file', file);
-  formData.append('category', category);
-  formData.append('slotIndex', String(slotIndex));
-
-  await api.post(`/products/${productId}/files/upload`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' },
-    onUploadProgress: (e) => {
-      if (onProgress && e.total) {
-        onProgress(Math.round((e.loaded / e.total) * 100));
-      }
-    },
+  // 1. Request signed upload permission from backend
+  const auth = await requestUploadUrl(productId, {
+    category,
+    slotIndex,
+    filename: file.name,
+    fileSize: file.size,
+    mimeType: file.type || 'application/octet-stream',
   });
 
-  invalidateApiCache(`/products/${productId}`);
-  invalidateApiCache('/storage');
-  invalidateApiCache('/dashboard');
+  try {
+    // 2. Direct upload to Supabase Storage with real-time progress tracking
+    let uploadedSuccessfully = false;
+
+    // Use axios PUT directly to Supabase signed URL
+    try {
+      await axios.put(auth.signedUrl, file, {
+        headers: {
+          'Content-Type': file.type || 'application/octet-stream',
+        },
+        onUploadProgress: (e) => {
+          if (onProgress && e.total) {
+            onProgress(Math.round((e.loaded / e.total) * 100));
+          }
+        },
+      });
+      uploadedSuccessfully = true;
+    } catch (putErr) {
+      // Fallback: try Supabase JS client uploadToSignedUrl if available
+      if (supabase?.storage) {
+        const { error } = await supabase.storage
+          .from(auth.bucket)
+          .uploadToSignedUrl(auth.path, auth.token, file, {
+            contentType: file.type || 'application/octet-stream',
+            upsert: false,
+          });
+        if (error) throw error;
+        uploadedSuccessfully = true;
+      } else {
+        throw putErr;
+      }
+    }
+
+    if (!uploadedSuccessfully) {
+      throw new Error('Direct upload to storage failed');
+    }
+
+    // 3. Confirm upload with backend (triggers range-based magic-byte verification)
+    await confirmUpload(productId, auth.fileId);
+
+    // Invalidate stale caches
+    invalidateApiCache(`/products/${productId}`);
+    invalidateApiCache('/storage');
+    invalidateApiCache('/dashboard');
+  } catch (err: any) {
+    // Best-effort cleanup of pending record
+    await abortUpload(productId, auth.fileId);
+    throw err;
+  }
 }
 
 // ── PDF ──────────────────────────────────────────────────────
