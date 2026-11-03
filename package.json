@@ -1,0 +1,32 @@
+{
+  "name": "material-data-management-system",
+  "version": "1.0.0",
+  "description": "Material Data Management System (MDMS) — Unified Fullstack App",
+  "private": true,
+  "workspaces": [
+    "backend",
+    "frontend"
+  ],
+  "scripts": {
+    "dev": "concurrently -n \"API,WEB\" -c \"cyan,green\" \"npm run dev --workspace=backend\" \"npm run dev --workspace=frontend\"",
+    "dev:backend": "npm run dev --workspace=backend",
+    "dev:frontend": "npm run dev --workspace=frontend",
+    "build:backend": "npm run build --workspace=backend",
+    "build:frontend": "npm run build --workspace=frontend",
+    "build": "npm run build:backend && npm run build:frontend",
+    "prisma:generate": "prisma generate --schema=backend/prisma/schema.prisma",
+    "prisma:migrate": "prisma migrate dev --schema=backend/prisma/schema.prisma",
+    "prisma:deploy": "prisma migrate deploy --schema=backend/prisma/schema.prisma",
+    "postinstall": "prisma generate --schema=backend/prisma/schema.prisma",
+    "start": "node backend/dist/server.js",
+    "test": "npm run test --workspace=backend"
+  },
+  "devDependencies": {
+    "@types/node": "^20.12.7",
+    "concurrently": "^8.2.2",
+    "typescript": "^5.4.5"
+  },
+  "optionalDependencies": {
+    "@rolldown/binding-win32-x64-msvc": "^1.2.16"
+  }
+}

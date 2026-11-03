@@ -2,6 +2,7 @@ import express from 'express';
 import cors from 'cors';
 import helmet from 'helmet';
 import morgan from 'morgan';
+import path from 'path';
 import rateLimit from 'express-rate-limit';
 import { config } from './config';
 import routes from './routes';
@@ -113,7 +114,21 @@ app.get('/health', (_req, res) => {
 });
 
 // ── API Routes ───────────────────────────────────────────────
+// Mount on both /api and / to ensure compatibility whether the environment preserves or strips /api
 app.use('/api', routes);
+app.use('/', routes);
+
+// ── Serve Frontend in Standalone Production Mode ─────────────
+if (!process.env.VERCEL && process.env.NODE_ENV === 'production') {
+  const frontendDistPath = path.resolve(__dirname, '../../frontend/dist');
+  app.use(express.static(frontendDistPath));
+  app.get('*', (req, res, next) => {
+    if (req.path.startsWith('/api') || req.path.startsWith('/health')) {
+      return next();
+    }
+    res.sendFile(path.join(frontendDistPath, 'index.html'));
+  });
+}
 
 // ── Error Handler ────────────────────────────────────────────
 app.use(errorHandler);
