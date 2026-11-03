@@ -2,20 +2,21 @@ import { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import {
   getBatches, createBatch, updateBatch, deleteBatch,
-  getBatchDeletionSummary, type BatchDeletionSummary
+  getBatchDeletionSummary, downloadBatchZip, type BatchDeletionSummary
 } from '../services/api';
 import type { Batch } from '../types';
 import { formatBytes, formatDateTime, getStatusColor, formatStatus } from '../utils/helpers';
 import {
   Plus, Package, FolderOpen, Trash2, Edit2, Loader2, X,
   Calendar, HardDrive, AlertTriangle, AlertOctagon, CheckSquare,
-  Square, FileArchive, FileText, CheckCircle2
+  Square, FileArchive, FileText, CheckCircle2, Download
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
 export default function BatchesPage() {
   const [batches, setBatches] = useState<Batch[]>([]);
   const [loading, setLoading] = useState(true);
+  const [downloadingBatchId, setDownloadingBatchId] = useState<string | null>(null);
 
   // Create modal state
   const [showCreate, setShowCreate] = useState(false);
@@ -116,6 +117,53 @@ export default function BatchesPage() {
       toast.error(err.response?.data?.error || 'Failed to delete batch');
     } finally {
       setDeleting(false);
+    }
+  };
+
+  const handleDownloadBatchZip = async (batchId: string, batchName: string) => {
+    if (downloadingBatchId) return;
+    setDownloadingBatchId(batchId);
+    try {
+      const url = downloadBatchZip(batchId);
+      const response = await fetch(url);
+      if (!response.ok) {
+        let errMsg = 'Failed to download batch ZIP';
+        try {
+          const errData = await response.json();
+          if (errData.error) errMsg = errData.error;
+        } catch {}
+        throw new Error(errMsg);
+      }
+
+      // Read Content-Disposition filename if available
+      let filename = `${batchName.replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, '-')}.zip`;
+      const disposition = response.headers.get('Content-Disposition');
+      if (disposition) {
+        const matchUtf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+        const matchRegular = disposition.match(/filename="?([^";]+)"?/i);
+        if (matchUtf8 && matchUtf8[1]) {
+          filename = decodeURIComponent(matchUtf8[1]);
+        } else if (matchRegular && matchRegular[1]) {
+          filename = matchRegular[1];
+        }
+      }
+
+      const blob = await response.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+
+      toast.success(`Batch ZIP downloaded: ${filename}`);
+      fetchBatches();
+    } catch (err: any) {
+      console.error('Download batch ZIP error:', err);
+      toast.error(err.message || 'Failed to download batch ZIP');
+    } finally {
+      setDownloadingBatchId(null);
     }
   };
 
@@ -542,6 +590,28 @@ export default function BatchesPage() {
                     <p className="text-[10px] text-slate-500 uppercase">Complete</p>
                   </div>
                 </div>
+
+                {/* Download Entire Batch ZIP Button */}
+                <div className="mt-4 pt-3 border-t border-slate-100">
+                  <button
+                    onClick={() => handleDownloadBatchZip(batch.id, batch.batchName)}
+                    disabled={downloadingBatchId === batch.id}
+                    className="w-full flex items-center justify-center gap-2 px-3 py-2 bg-slate-50 hover:bg-blue-50 text-slate-700 hover:text-blue-700 border border-slate-200/80 hover:border-blue-200 rounded-xl text-xs font-semibold transition-all shadow-sm disabled:opacity-50 disabled:cursor-not-allowed"
+                    title="Download entire batch data as a structured ZIP archive"
+                  >
+                    {downloadingBatchId === batch.id ? (
+                      <>
+                        <Loader2 className="w-3.5 h-3.5 animate-spin text-blue-600" />
+                        <span>Preparing Batch ZIP...</span>
+                      </>
+                    ) : (
+                      <>
+                        <FileArchive className="w-3.5 h-3.5 text-blue-600" />
+                        <span>Download Batch ZIP</span>
+                      </>
+                    )}
+                  </button>
+                </div>
               </div>
 
               {/* Card footer */}
@@ -557,6 +627,18 @@ export default function BatchesPage() {
                   </span>
                 </div>
                 <div className="flex items-center gap-1">
+                  <button
+                    onClick={() => handleDownloadBatchZip(batch.id, batch.batchName)}
+                    disabled={downloadingBatchId === batch.id}
+                    className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors disabled:opacity-50"
+                    title="Download Batch ZIP"
+                  >
+                    {downloadingBatchId === batch.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                    ) : (
+                      <Download className="w-4 h-4" />
+                    )}
+                  </button>
                   <Link
                     to={`/batches/${batch.id}`}
                     className="p-1.5 rounded-lg text-slate-400 hover:text-blue-600 hover:bg-blue-50 transition-colors"

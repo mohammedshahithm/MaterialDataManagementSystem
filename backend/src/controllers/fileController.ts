@@ -203,17 +203,44 @@ export const fileController = {
     try {
       const { fileId } = req.params;
 
-      const file = await prisma.productFile.findUnique({ where: { id: fileId } });
+      const file = await prisma.productFile.findUnique({
+        where: { id: fileId },
+        include: { product: true },
+      });
       if (!file || file.deletedAt) throw new AppError('File not found', 404);
 
       const isInline = req.query.inline === 'true' || req.query.preview === 'true';
+
+      // Standard default naming according to MDMS specification:
+      // - Original PDF: Product-001-Original-Document.pdf
+      // - Microstructure: Product-001-Microstructure-1.png
+      // - Graph: Product-001-Graph-Image.png
+      // - WhatsApp: Product-001-WhatsApp-Image.png
+      const ext =
+        path.extname(file.originalFilename || '').toLowerCase() ||
+        (file.mimeType === 'application/pdf' ? '.pdf' : '.png');
+      const productCode = file.product ? file.product.productCode.replace(/[\\/:*?"<>|]/g, '-') : 'Product';
+      let defaultFilename = file.originalFilename;
+
+      if (file.category === 'source_pdf') {
+        defaultFilename = `${productCode}-Original-Document${ext}`;
+      } else if (file.category === 'microstructure') {
+        defaultFilename = `${productCode}-Microstructure-${(file.slotIndex ?? 0) + 1}${ext}`;
+      } else if (file.category === 'graph') {
+        defaultFilename = `${productCode}-Graph-Image${ext}`;
+      } else if (file.category === 'whatsapp_image') {
+        defaultFilename = `${productCode}-WhatsApp-Image${ext}`;
+      } else if (file.category === 'generated_report') {
+        defaultFilename = `${productCode}-Report.pdf`;
+      }
+
       const downloadUrl = await storageService.getSignedUrl(
         file.storageKey,
         config.app.signedUrlExpiry,
-        isInline ? undefined : { download: file.originalFilename }
+        isInline ? undefined : { download: defaultFilename }
       );
 
-      return res.json({ downloadUrl, filename: file.originalFilename });
+      return res.json({ downloadUrl, filename: defaultFilename });
     } catch (err) {
       next(err);
     }

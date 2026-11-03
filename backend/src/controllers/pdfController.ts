@@ -13,6 +13,36 @@ import { format } from 'date-fns';
 // Allowed image mimes that PDFKit can embed
 const PDFKIT_IMAGE_FORMATS = ['image/jpeg', 'image/png'];
 
+/** Helper to inspect image dimensions and aspect ratio */
+async function getImageDimensions(
+  buf: Buffer
+): Promise<{ width: number; height: number; aspect: number }> {
+  const meta = await sharp(buf).metadata();
+  let width = meta.width || 800;
+  let height = meta.height || 600;
+  if (meta.orientation && meta.orientation >= 5) {
+    const temp = width;
+    width = height;
+    height = temp;
+  }
+  return { width, height, aspect: width / height };
+}
+
+/** Compute fitted dimensions preserving aspect ratio */
+function computeFit(
+  aspect: number,
+  maxW: number,
+  maxH: number
+): { width: number; height: number } {
+  let w = maxW;
+  let h = w / aspect;
+  if (h > maxH) {
+    h = maxH;
+    w = h * aspect;
+  }
+  return { width: w, height: h };
+}
+
 export const pdfController = {
   /** Generate the final product report PDF */
   async generateReport(req: Request, res: Response, next: NextFunction) {
@@ -36,24 +66,25 @@ export const pdfController = {
 
       if (!product) throw new AppError('Product not found', 404);
 
-      // Verify required files exist
+      // Map files by category
       const filesByCategory: Record<string, typeof product.files> = {};
       product.files.forEach((f) => {
         if (!filesByCategory[f.category]) filesByCategory[f.category] = [];
         filesByCategory[f.category].push(f);
       });
 
-      const missing: string[] = [];
-      if (!filesByCategory['microstructure']?.length) missing.push('Microstructure image');
-      if (!filesByCategory['graph']?.length) missing.push('Graph image');
-      if (!filesByCategory['source_pdf']?.length) missing.push('Original PDF');
-      if (!filesByCategory['whatsapp_image']?.length) missing.push('WhatsApp image');
+      // Validate that at least one file exists to generate a meaningful report
+      const hasAnyFiles =
+        (filesByCategory['microstructure']?.length || 0) > 0 ||
+        (filesByCategory['graph']?.length || 0) > 0 ||
+        (filesByCategory['source_pdf']?.length || 0) > 0 ||
+        (filesByCategory['whatsapp_image']?.length || 0) > 0;
 
-      if (missing.length > 0) {
-        throw new AppError(`Missing required files: ${missing.join(', ')}`, 400);
+      if (!hasAnyFiles) {
+        throw new AppError('At least one uploaded file is required to generate a report', 400);
       }
 
-      // Download all source files from Supabase Storage
+      // Download helper from Supabase Storage
       const downloadFile = async (key: string): Promise<Buffer> => {
         return storageService.downloadFile(key);
       };
@@ -64,76 +95,136 @@ export const pdfController = {
         mimeType: string
       ): Promise<Buffer> => {
         if (PDFKIT_IMAGE_FORMATS.includes(mimeType)) return buffer;
-        // Convert TIFF, WEBP, etc. to PNG
         return sharp(buffer).png().toBuffer();
       };
 
-      // Download microstructure images
+      // Download microstructure images (up to 3)
       const microImages: Buffer[] = [];
-      for (const f of filesByCategory['microstructure']) {
-        const buf = await downloadFile(f.storageKey);
-        microImages.push(await ensureCompatibleImage(buf, f.mimeType));
+      if (filesByCategory['microstructure']?.length) {
+        for (const f of filesByCategory['microstructure'].slice(0, 3)) {
+          const buf = await downloadFile(f.storageKey);
+          microImages.push(await ensureCompatibleImage(buf, f.mimeType));
+        }
       }
 
-      // Download graph
-      const graphFile = filesByCategory['graph'][0];
-      const graphBuffer = await ensureCompatibleImage(
-        await downloadFile(graphFile.storageKey),
-        graphFile.mimeType
-      );
+      // Download graph if present
+      let graphBuffer: Buffer | null = null;
+      if (filesByCategory['graph']?.length) {
+        const graphFile = filesByCategory['graph'][0];
+        graphBuffer = await ensureCompatibleImage(
+          await downloadFile(graphFile.storageKey),
+          graphFile.mimeType
+        );
+      }
 
-      // Download WhatsApp image
-      const waFile = filesByCategory['whatsapp_image'][0];
-      const waBuffer = await ensureCompatibleImage(
-        await downloadFile(waFile.storageKey),
-        waFile.mimeType
-      );
+      // Download WhatsApp image if present
+      let waBuffer: Buffer | null = null;
+      if (filesByCategory['whatsapp_image']?.length) {
+        const waFile = filesByCategory['whatsapp_image'][0];
+        waBuffer = await ensureCompatibleImage(
+          await downloadFile(waFile.storageKey),
+          waFile.mimeType
+        );
+      }
 
-      // Download source PDF
-      const sourcePdfFile = filesByCategory['source_pdf'][0];
-      const sourcePdfBuffer = await downloadFile(sourcePdfFile.storageKey);
+      // Download source PDF if present
+      let sourcePdfBuffer: Buffer | null = null;
+      if (filesByCategory['source_pdf']?.length) {
+        const sourcePdfFile = filesByCategory['source_pdf'][0];
+        sourcePdfBuffer = await downloadFile(sourcePdfFile.storageKey);
+      }
 
-      // ── Build the report PDF with PDFKit ──
+      // ── 1. Inspect source PDF if provided ──
+      let sourcePdfDoc: PDFLibDocument | null = null;
+      let sourcePdfPageCount = 0;
+      if (sourcePdfBuffer && sourcePdfBuffer.length > 0) {
+        try {
+          sourcePdfDoc = await PDFLibDocument.load(sourcePdfBuffer, {
+            ignoreEncryption: true,
+          });
+          sourcePdfPageCount = sourcePdfDoc.getPageCount();
+        } catch (err) {
+          console.error('Failed to load source PDF:', err);
+        }
+      }
+
+      // ── 2. Pre-calculate exact page numbers for generated sections ──
+      let currentPage = 1;
+      const coverPageNum = currentPage++;
+      const microPageNum = microImages.length > 0 ? currentPage++ : null;
+      const graphPageNum = graphBuffer ? currentPage++ : null;
+      const effectiveSourcePdfCount = sourcePdfDoc
+        ? sourcePdfPageCount
+        : sourcePdfBuffer
+        ? 1
+        : 0;
+      const waPageNum = waBuffer ? currentPage + effectiveSourcePdfCount : null;
+
+      // ── 3. Build generated sections with PDFKit ──
       const pdfChunks: Buffer[] = [];
       const metadata = (product.metadata as Record<string, any>) || {};
       const workDate = format(product.dateFolder.workDate, 'dd-MM-yyyy');
 
       const doc = new PDFDocument({
         size: 'A4',
-        margins: { top: 60, bottom: 60, left: 50, right: 50 },
+        margins: { top: 50, bottom: 45, left: 50, right: 50 },
         info: {
           Title: `Report - ${product.productName}`,
           Author: 'Material Data Management System',
         },
+        autoFirstPage: true,
       });
 
       doc.on('data', (chunk: Buffer) => pdfChunks.push(chunk));
 
-      const pageWidth = doc.page.width - 100; // margins
-      const pageHeight = doc.page.height - 120;
-      let pageNumber = 1;
+      const pageWidth = doc.page.width - 100; // 495.28 pt
+      const startY = 88;
+      const availH = 700;
+      const availW = pageWidth;
 
-      const addPageNumber = () => {
-        doc.fontSize(8).fillColor('#999999')
-          .text(`Page ${pageNumber}`, 50, doc.page.height - 40, { align: 'center' });
-        pageNumber++;
+      // Safe footer rendering: temporarily disable bottom margin and disable linebreaks
+      // to guarantee PDFKit never triggers an automatic pageAddition on footer overflow
+      const addFooter = (pageNum: number) => {
+        const savedBottom = doc.page.margins.bottom;
+        doc.page.margins.bottom = 0;
+        doc
+          .fontSize(8)
+          .fillColor('#999999')
+          .font('Helvetica')
+          .text(`Page ${pageNum}`, 50, doc.page.height - 35, {
+            width: pageWidth,
+            align: 'center',
+            lineBreak: false,
+          });
+        doc.page.margins.bottom = savedBottom;
       };
 
       const addHeader = (title: string) => {
-        doc.fontSize(14).fillColor('#1e3a5f').font('Helvetica-Bold')
-          .text(title, { underline: false });
-        doc.moveDown(0.3);
-        doc.moveTo(50, doc.y).lineTo(50 + pageWidth, doc.y)
-          .strokeColor('#1e3a5f').lineWidth(1).stroke();
-        doc.moveDown(0.5);
+        doc
+          .fontSize(14)
+          .fillColor('#1e3a5f')
+          .font('Helvetica-Bold')
+          .text(title, 50, 50, { width: pageWidth });
+        doc
+          .moveTo(50, 72)
+          .lineTo(50 + pageWidth, 72)
+          .strokeColor('#1e3a5f')
+          .lineWidth(1)
+          .stroke();
       };
 
-      // ── PAGE 1: Cover ──
+      // ── PAGE 1: Cover (preserved exact appearance) ──
       doc.moveDown(3);
-      doc.fontSize(10).fillColor('#888888').font('Helvetica')
+      doc
+        .fontSize(10)
+        .fillColor('#888888')
+        .font('Helvetica')
         .text('MATERIAL DATA MANAGEMENT SYSTEM', { align: 'center' });
       doc.moveDown(0.5);
-      doc.fontSize(24).fillColor('#1e3a5f').font('Helvetica-Bold')
+      doc
+        .fontSize(24)
+        .fillColor('#1e3a5f')
+        .font('Helvetica-Bold')
         .text('Product Report', { align: 'center' });
       doc.moveDown(2);
 
@@ -155,91 +246,174 @@ export const pdfController = {
       });
 
       doc.moveDown(1);
-      doc.fontSize(9).fillColor('#999999')
-        .text(`Generated on ${format(new Date(), 'dd-MM-yyyy HH:mm')}`, { align: 'center' });
+      doc
+        .fontSize(9)
+        .fillColor('#999999')
+        .text(`Generated on ${format(new Date(), 'dd-MM-yyyy HH:mm')}`, {
+          align: 'center',
+        });
 
-      addPageNumber();
+      addFooter(coverPageNum);
 
-      // ── PAGE 2: Microstructure Images ──
-      doc.addPage();
-      addHeader('Microstructure Images');
+      // ── PAGE 2: Microstructure Images (single dedicated page, up to 3 images) ──
+      if (microImages.length > 0) {
+        doc.addPage();
+        addHeader('Microstructure Images');
 
-      const fitImage = (
-        buffer: Buffer,
-        maxW: number,
-        maxH: number
-      ): { buffer: Buffer; width: number; height: number } => {
-        // PDFKit auto-scales, but we compute for layout
-        return { buffer, width: maxW, height: maxH };
-      };
+        if (microImages.length === 1) {
+          const meta = await getImageDimensions(microImages[0]);
+          const fit = computeFit(meta.aspect, availW, availH);
+          const x = 50 + (availW - fit.width) / 2;
+          const y = startY + (availH - fit.height) / 2;
+          doc.image(microImages[0], x, y, { width: fit.width, height: fit.height });
+        } else if (microImages.length === 2) {
+          const m0 = await getImageDimensions(microImages[0]);
+          const m1 = await getImageDimensions(microImages[1]);
+          const bothPortrait = m0.aspect < 0.9 && m1.aspect < 0.9;
 
-      if (microImages.length === 1) {
-        doc.image(microImages[0], { fit: [pageWidth, pageHeight - 80], align: 'center' });
-      } else if (microImages.length === 2) {
-        const imgW = (pageWidth - 20) / 2;
-        const y = doc.y;
-        doc.image(microImages[0], 50, y, { fit: [imgW, 300] });
-        doc.image(microImages[1], 50 + imgW + 20, y, { fit: [imgW, 300] });
-        doc.y = y + 310;
-      } else if (microImages.length === 3) {
-        const imgW = (pageWidth - 20) / 2;
-        const y = doc.y;
-        doc.image(microImages[0], 50, y, { fit: [imgW, 250] });
-        doc.image(microImages[1], 50 + imgW + 20, y, { fit: [imgW, 250] });
-        doc.y = y + 260;
-        doc.image(microImages[2], 50, doc.y, { fit: [imgW, 250], align: 'center' });
-        doc.y += 260;
+          if (bothPortrait) {
+            const colW = (availW - 15) / 2;
+            const fit0 = computeFit(m0.aspect, colW, availH);
+            const fit1 = computeFit(m1.aspect, colW, availH);
+            doc.image(
+              microImages[0],
+              50 + (colW - fit0.width) / 2,
+              startY + (availH - fit0.height) / 2,
+              { width: fit0.width, height: fit0.height }
+            );
+            doc.image(
+              microImages[1],
+              50 + colW + 15 + (colW - fit1.width) / 2,
+              startY + (availH - fit1.height) / 2,
+              { width: fit1.width, height: fit1.height }
+            );
+          } else {
+            const slotH = (availH - 20) / 2;
+            const fit0 = computeFit(m0.aspect, availW, slotH);
+            const fit1 = computeFit(m1.aspect, availW, slotH);
+            doc.image(
+              microImages[0],
+              50 + (availW - fit0.width) / 2,
+              startY + (slotH - fit0.height) / 2,
+              { width: fit0.width, height: fit0.height }
+            );
+            doc.image(
+              microImages[1],
+              50 + (availW - fit1.width) / 2,
+              startY + slotH + 20 + (slotH - fit1.height) / 2,
+              { width: fit1.width, height: fit1.height }
+            );
+          }
+        } else if (microImages.length >= 3) {
+          const m0 = await getImageDimensions(microImages[0]);
+          const m1 = await getImageDimensions(microImages[1]);
+          const m2 = await getImageDimensions(microImages[2]);
+          const rowH = (availH - 20) / 2;
+          const colW = (availW - 15) / 2;
+
+          const fit0 = computeFit(m0.aspect, colW, rowH);
+          const fit1 = computeFit(m1.aspect, colW, rowH);
+          const fit2 = computeFit(m2.aspect, availW * 0.75, rowH);
+
+          doc.image(
+            microImages[0],
+            50 + (colW - fit0.width) / 2,
+            startY + (rowH - fit0.height) / 2,
+            { width: fit0.width, height: fit0.height }
+          );
+          doc.image(
+            microImages[1],
+            50 + colW + 15 + (colW - fit1.width) / 2,
+            startY + (rowH - fit1.height) / 2,
+            { width: fit1.width, height: fit1.height }
+          );
+          doc.image(
+            microImages[2],
+            50 + (availW - fit2.width) / 2,
+            startY + rowH + 20 + (rowH - fit2.height) / 2,
+            { width: fit2.width, height: fit2.height }
+          );
+        }
+
+        if (microPageNum) addFooter(microPageNum);
       }
 
-      addPageNumber();
+      // ── PAGE 3: Graph Image (dedicated page, centered) ──
+      if (graphBuffer) {
+        doc.addPage();
+        addHeader('Graph');
+        const meta = await getImageDimensions(graphBuffer);
+        const fit = computeFit(meta.aspect, availW, availH);
+        const x = 50 + (availW - fit.width) / 2;
+        const y = startY + (availH - fit.height) / 2;
+        doc.image(graphBuffer, x, y, { width: fit.width, height: fit.height });
+        if (graphPageNum) addFooter(graphPageNum);
+      }
 
-      // ── PAGE 3: Graph Image ──
-      doc.addPage();
-      addHeader('Graph');
-      doc.image(graphBuffer, { fit: [pageWidth, pageHeight - 80], align: 'center' });
-      addPageNumber();
-
-      // ── PAGE 4: WhatsApp Image ──
-      doc.addPage();
-      addHeader('WhatsApp Image');
-      doc.image(waBuffer, { fit: [pageWidth, pageHeight - 80], align: 'center' });
-      addPageNumber();
+      // ── WhatsApp Image (dedicated page, centered) ──
+      if (waBuffer) {
+        doc.addPage();
+        addHeader('WhatsApp Image');
+        const meta = await getImageDimensions(waBuffer);
+        const fit = computeFit(meta.aspect, availW, availH);
+        const x = 50 + (availW - fit.width) / 2;
+        const y = startY + (availH - fit.height) / 2;
+        doc.image(waBuffer, x, y, { width: fit.width, height: fit.height });
+        if (waPageNum) addFooter(waPageNum);
+      }
 
       doc.end();
 
-      // Wait for PDFKit to finish
+      // Wait for PDFKit stream to complete
       const pdfKitBuffer = await new Promise<Buffer>((resolve) => {
         doc.on('end', () => resolve(Buffer.concat(pdfChunks)));
       });
 
-      // ── Merge with source PDF using pdf-lib ──
+      // ── 4. Merge sections in the EXACT required order with pdf-lib ──
       const mergedPdf = await PDFLibDocument.create();
-
-      // Load our generated pages
       const generatedPdf = await PDFLibDocument.load(pdfKitBuffer);
-      const genPages = await mergedPdf.copyPages(
-        generatedPdf,
-        generatedPdf.getPageIndices()
-      );
-      genPages.forEach((page) => mergedPdf.addPage(page));
 
-      // Load and append the original source PDF
-      try {
-        const sourcePdf = await PDFLibDocument.load(sourcePdfBuffer, {
-          ignoreEncryption: true,
-        });
+      let genIdx = 0;
+
+      // 1. Cover
+      const [coverPage] = await mergedPdf.copyPages(generatedPdf, [genIdx++]);
+      mergedPdf.addPage(coverPage);
+
+      // 2. Microstructure Images (if present)
+      if (microImages.length > 0) {
+        const [microPage] = await mergedPdf.copyPages(generatedPdf, [genIdx++]);
+        mergedPdf.addPage(microPage);
+      }
+
+      // 3. Graph (if present)
+      if (graphBuffer) {
+        const [graphPage] = await mergedPdf.copyPages(generatedPdf, [genIdx++]);
+        mergedPdf.addPage(graphPage);
+      }
+
+      // 4. All pages from Original Uploaded PDF (unaltered, preserving dimensions/orientation)
+      if (sourcePdfDoc) {
         const srcPages = await mergedPdf.copyPages(
-          sourcePdf,
-          sourcePdf.getPageIndices()
+          sourcePdfDoc,
+          sourcePdfDoc.getPageIndices()
         );
         srcPages.forEach((page) => mergedPdf.addPage(page));
-      } catch (err) {
-        console.error('Failed to import source PDF:', err);
-        // Continue without source PDF pages — add a note page
+      } else if (sourcePdfBuffer && sourcePdfBuffer.length > 0) {
         const notePage = mergedPdf.addPage();
-        notePage.drawText('Original PDF could not be imported — file may be corrupted.', {
-          x: 50, y: 700, size: 12,
-        });
+        notePage.drawText(
+          'Original PDF could not be imported — file may be corrupted.',
+          {
+            x: 50,
+            y: 700,
+            size: 12,
+          }
+        );
+      }
+
+      // 5. WhatsApp Image (FINAL PAGE)
+      if (waBuffer) {
+        const [waPage] = await mergedPdf.copyPages(generatedPdf, [genIdx++]);
+        mergedPdf.addPage(waPage);
       }
 
       const finalPdfBytes = await mergedPdf.save();
@@ -287,13 +461,14 @@ export const pdfController = {
       await logAudit(userId, 'GENERATE_REPORT', 'product', productId, {
         reportFileId: reportRecord.id,
         reportSize: finalBuffer.length,
-        pageCount: genPages.length + (filesByCategory['source_pdf'] ? 1 : 0),
+        pageCount: mergedPdf.getPageCount(),
       });
 
       return res.json({
         message: 'Report generated successfully',
         fileId: reportRecord.id,
         size: finalBuffer.length,
+        pageCount: mergedPdf.getPageCount(),
       });
     } catch (err) {
       next(err);

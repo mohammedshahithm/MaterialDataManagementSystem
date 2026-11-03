@@ -25,7 +25,7 @@ describe('Supabase PostgreSQL & Prisma Live Integration Tests', () => {
       },
     });
     testUserId = user.id;
-  });
+  }, 30000);
 
   afterAll(async () => {
     // Clean up only our explicitly created test records
@@ -50,7 +50,7 @@ describe('Supabase PostgreSQL & Prisma Live Integration Tests', () => {
     } catch (err) {
       console.warn('Test cleanup warning:', err);
     }
-  });
+  }, 30000);
 
   it('connects to Supabase PostgreSQL database', async () => {
     const result = await prisma.$queryRaw<Array<{ result: number }>>`SELECT 1 as result`;

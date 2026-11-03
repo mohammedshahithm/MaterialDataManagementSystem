@@ -142,15 +142,16 @@ In accordance with explicit client requirements, the system operates as a **Shar
   - **Role:** `worker` (with unrestricted operational capabilities)
 - **Database & Audit Integrity:** Foreign key integrity across PostgreSQL is 100% maintained without requiring nullable foreign keys or risking schema corruption. All batches, date folders, inspection files, and audit events created on the shop floor are honestly attributed to `Shared Factory Terminal`.
 
-#### 3.4.2 Batch Deletion Safeguards (Pure Download Tracking Mode)
+#### 3.4.2 Batch Deletion Safeguards (Pure Download Tracking & Retention Mode)
 Every visitor connected through the approved company network can initiate permanent cloud storage deletion of eligible batches. To prevent accidental data loss, the following technical safeguards are strictly enforced:
-1. **Batch Must Be Closed:** Active batches cannot be deleted from cloud storage.
+1. **Retention Inactivity Eligibility:** Batches are evaluated dynamically based on their latest activity (latest product creation, file upload, or modification). After 5 days of inactivity, the batch is marked as eligible for deletion with a clear warning in Batch Management. Active batches currently in use by workers do not expire.
 2. **Download Status Inspection & Prominent Warning:** The modal inspects whether the Complete Batch ZIP archive has been downloaded. If the batch archive has NOT been downloaded, a prominent warning alerts the operator before proceeding.
 3. **No Active Operations:** The backend verifies that no file uploads or report generations are currently in progress (`uploadStatus: 'pending'`).
 4. **Complete Information Modal:** The user interface displays full batch metrics (Batch Name, Total Products, Files Count, Storage Size Reclaimed, and Download Status).
 5. **Explicit Declaration Checkbox:** The operator must actively check an explicit verification declaration before the deletion button activates.
 6. **Cloud Object Deletion & Database Preservation:** Supabase Storage binary files are deleted and verified, `ProductFile.deletedAt` timestamps are set, while all database batch records, date folders, product inspection tests, checklists, and audit entries are preserved.
 7. **Partial Failure Retries:** If transient network interruptions occur during storage deletion, batches transition to `partially_deleted` with one-click retry support.
+8. **Zero Automated Destructive Deletions:** The background retention job never automatically deletes batches or cloud files; deletion is strictly manual upon confirmation.
 
 #### 3.4.3 Network Perimeter & Access Controls
 Because individual login screens are eliminated, perimeter security is strictly enforced:
@@ -365,6 +366,52 @@ services:
       - /etc/letsencrypt:/etc/letsencrypt:ro
     depends_on:
       - backend
+
+### 6.5 Option D: Vercel Multi-Service Deployment (Serverless Architecture)
+
+MDMS is pre-configured for modern Vercel multi-service deployment with an Express Serverless Function backend and a Vite React SPA frontend.
+
+#### Root Configuration (`vercel.json`):
+```json
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "services": {
+    "backend": {
+      "rootDirectory": "backend",
+      "framework": "node",
+      "entrypoint": "src/server.ts"
+    },
+    "frontend": {
+      "rootDirectory": "frontend",
+      "framework": "vite"
+    }
+  },
+  "rewrites": [
+    { "source": "/api/(.*)", "destination": "backend" },
+    { "source": "/(.*)", "destination": "frontend" }
+  ],
+  "crons": [
+    {
+      "path": "/api/cron/retention",
+      "schedule": "0 * * * *"
+    }
+  ]
+}
+```
+
+#### Key Serverless Architectural Features:
+1. **Serverless Entrypoint Compatibility:**
+   - In `backend/src/server.ts`, `app.listen()` is guarded by `if (!process.env.VERCEL)`. Under Vercel, the Express app is exported directly (`export default app`) for serverless function execution.
+   - Persistent `node-cron` is disabled in serverless mode.
+2. **Automated Vercel Cron Scheduling:**
+   - The retention calculation job runs hourly via Vercel Cron at `/api/cron/retention` (`0 * * * *`).
+   - Uses PostgreSQL advisory lock (`pg_try_advisory_lock`) to guarantee single execution.
+3. **Frontend SPA Catch-All Rewrites:**
+   - `frontend/vercel.json` routes all client paths (`/(.*)`) to `/index.html`, preventing 404 errors on browser page reloads.
+4. **Production API Base Routing:**
+   - `frontend/src/services/api.ts` automatically resolves `API_BASE` to `'/api'` in production, seamlessly routing through Vercel's edge network to the backend service.
+5. **Private Network Boundary on Vercel:**
+   - Configure **Vercel Deployment Protection / Trusted IPs** in Project Settings -> Security -> IP Allowlist to restrict access to approved factory IP addresses.
 ```
 
 ---

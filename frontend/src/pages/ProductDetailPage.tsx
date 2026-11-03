@@ -115,6 +115,25 @@ export default function ProductDetailPage() {
     }
   };
 
+  const handleDownloadFile = async (file: ProductFile) => {
+    try {
+      const { downloadUrl, filename } = await getFileDownloadUrl(file.id, false);
+      const response = await fetch(downloadUrl);
+      if (!response.ok) throw new Error('Download failed');
+      const blob = await response.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename || file.originalFilename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+      toast.success(`Downloaded ${link.download}`);
+    } catch {
+      toast.error('Failed to download file');
+    }
+  };
+
   const handleGenerateReport = async () => {
     if (!productId) return;
     setGeneratingPdf(true);
@@ -303,6 +322,13 @@ export default function ProductDetailPage() {
                             title="Preview"
                           >
                             <Eye className="w-4 h-4" />
+                          </button>
+                          <button
+                            onClick={() => handleDownloadFile(slot.file!)}
+                            className="p-1.5 rounded-lg text-slate-400 hover:text-emerald-600 hover:bg-emerald-50 transition-colors"
+                            title="Download file"
+                          >
+                            <Download className="w-4 h-4" />
                           </button>
                           <button
                             onClick={() => handleDeleteFile(slot.file!.id, slot.label)}

@@ -122,7 +122,7 @@ app.use(errorHandler);
 // ── Server Execution (Local vs. Serverless) ─────────────────
 const PORT = config.port;
 
-if (!process.env.VERCEL) {
+if (!process.env.VERCEL && process.env.NODE_ENV !== 'test') {
   // Traditional long-running server (local development, Docker, VPS)
   app.listen(PORT, () => {
     console.log(`\n🚀 MDMS Backend running on http://localhost:${PORT}`);

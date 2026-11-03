@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import { getBatch, createDateFolder, getDateFolders, updateBatch } from '../services/api';
+import { getBatch, createDateFolder, getDateFolders, updateBatch, downloadBatchZip } from '../services/api';
 import type { BatchDetail, DateFolder } from '../types';
 import { formatDate, formatDateTime, formatBytes, getStatusColor, formatStatus } from '../utils/helpers';
 import {
-  ArrowLeft, Plus, CalendarDays, Loader2, X, FolderOpen, Edit2, AlertTriangle
+  ArrowLeft, Plus, CalendarDays, Loader2, X, FolderOpen, Edit2, AlertTriangle, FileArchive
 } from 'lucide-react';
 import toast from 'react-hot-toast';
 
@@ -13,6 +13,7 @@ export default function BatchDetailPage() {
   const [batch, setBatch] = useState<BatchDetail | null>(null);
   const [dateFolders, setDateFolders] = useState<DateFolder[]>([]);
   const [loading, setLoading] = useState(true);
+  const [downloadingZip, setDownloadingZip] = useState(false);
 
   // Create date modal state
   const [showCreateDate, setShowCreateDate] = useState(false);
@@ -86,6 +87,51 @@ export default function BatchDetailPage() {
     }
   };
 
+  const handleDownloadBatchZip = async () => {
+    if (!batchId || !batch || downloadingZip) return;
+    setDownloadingZip(true);
+    try {
+      const url = downloadBatchZip(batchId);
+      const response = await fetch(url);
+      if (!response.ok) {
+        let errMsg = 'Failed to download batch ZIP';
+        try {
+          const errData = await response.json();
+          if (errData.error) errMsg = errData.error;
+        } catch {}
+        throw new Error(errMsg);
+      }
+
+      let filename = `${batch.batchName.replace(/[\\/:*?"<>|]/g, '-').replace(/\s+/g, '-')}.zip`;
+      const disposition = response.headers.get('Content-Disposition');
+      if (disposition) {
+        const matchUtf8 = disposition.match(/filename\*=UTF-8''([^;]+)/i);
+        const matchRegular = disposition.match(/filename="?([^";]+)"?/i);
+        if (matchUtf8 && matchUtf8[1]) {
+          filename = decodeURIComponent(matchUtf8[1]);
+        } else if (matchRegular && matchRegular[1]) {
+          filename = matchRegular[1];
+        }
+      }
+
+      const blob = await response.blob();
+      const link = document.createElement('a');
+      link.href = URL.createObjectURL(blob);
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(link.href);
+
+      toast.success(`Batch ZIP downloaded: ${filename}`);
+    } catch (err: any) {
+      console.error('Download batch ZIP error:', err);
+      toast.error(err.message || 'Failed to download batch ZIP');
+    } finally {
+      setDownloadingZip(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -128,6 +174,24 @@ export default function BatchDetailPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
+            <button
+              onClick={handleDownloadBatchZip}
+              disabled={downloadingZip}
+              className="flex items-center gap-2 px-3.5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-medium transition-colors shadow-sm disabled:opacity-50"
+              title="Download entire batch data as a structured ZIP archive"
+            >
+              {downloadingZip ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-blue-600" />
+                  <span>Preparing ZIP...</span>
+                </>
+              ) : (
+                <>
+                  <FileArchive className="w-4 h-4 text-blue-600" />
+                  <span>Download Batch ZIP</span>
+                </>
+              )}
+            </button>
             <button
               onClick={openEditBatch}
               className="flex items-center gap-1.5 px-3.5 py-2.5 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-xl text-sm font-medium transition-colors shadow-sm"

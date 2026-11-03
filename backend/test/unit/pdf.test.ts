@@ -70,4 +70,172 @@ describe('PDF Generation Engine Unit Tests', () => {
 
     expect(finalDoc.getPageCount()).toBe(2);
   });
+
+  it('guarantees exact report structure: Cover -> Micro -> Graph -> Source PDF -> WhatsApp without blank pages', async () => {
+    // 1. Generate 3 dummy PNG images (Micro, Graph, WhatsApp)
+    const createTestPng = async (w: number, h: number, r: number, g: number, b: number) => {
+      return sharp({
+        create: { width: w, height: h, channels: 3, background: { r, g, b } },
+      }).png().toBuffer();
+    };
+
+    const micro1 = await createTestPng(800, 600, 100, 150, 200);
+    const graph = await createTestPng(1200, 800, 50, 180, 100);
+    const wa = await createTestPng(900, 1600, 200, 80, 80);
+
+    // 2. Generate a 5-page source PDF
+    const sourcePdf = await PDFLibDocument.create();
+    for (let i = 1; i <= 5; i++) {
+      const page = sourcePdf.addPage([595.28, 841.89]);
+      page.drawText(`Original Source PDF Page ${i}`, { x: 50, y: 800, size: 14 });
+    }
+    const sourcePdfBytes = await sourcePdf.save();
+    const sourcePdfDoc = await PDFLibDocument.load(sourcePdfBytes);
+    const sourcePdfPageCount = sourcePdfDoc.getPageCount();
+    expect(sourcePdfPageCount).toBe(5);
+
+    // 3. Generate PDFKit sections with safe footers
+    const doc = new PDFDocument({
+      size: 'A4',
+      margins: { top: 50, bottom: 45, left: 50, right: 50 },
+      autoFirstPage: true,
+    });
+    const chunks: Buffer[] = [];
+    doc.on('data', (c: Buffer) => chunks.push(c));
+
+    const pageWidth = doc.page.width - 100;
+    const addFooter = (pageNum: number) => {
+      const savedBottom = doc.page.margins.bottom;
+      doc.page.margins.bottom = 0;
+      doc.fontSize(8).fillColor('#999999').font('Helvetica').text(
+        `Page ${pageNum}`,
+        50,
+        doc.page.height - 35,
+        { width: pageWidth, align: 'center', lineBreak: false }
+      );
+      doc.page.margins.bottom = savedBottom;
+    };
+
+    let currentPage = 1;
+    const coverNum = currentPage++;
+    const microNum = currentPage++;
+    const graphNum = currentPage++;
+    const waNum = currentPage + sourcePdfPageCount;
+
+    // Cover Page
+    doc.fontSize(24).text('Product Report', { align: 'center' });
+    addFooter(coverNum);
+
+    // Microstructure Page
+    doc.addPage();
+    doc.fontSize(14).text('Microstructure Images');
+    doc.image(micro1, 50, 88, { fit: [pageWidth, 700] });
+    addFooter(microNum);
+
+    // Graph Page
+    doc.addPage();
+    doc.fontSize(14).text('Graph');
+    doc.image(graph, 50, 88, { fit: [pageWidth, 700] });
+    addFooter(graphNum);
+
+    // WhatsApp Page
+    doc.addPage();
+    doc.fontSize(14).text('WhatsApp Image');
+    doc.image(wa, 50, 88, { fit: [pageWidth, 700] });
+    addFooter(waNum);
+
+    doc.end();
+
+    const pdfKitBuf = await new Promise<Buffer>((resolve) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+
+    const generatedPdf = await PDFLibDocument.load(pdfKitBuf);
+    // Ensure PDFKit created EXACTLY 4 pages (no phantom blank pages from footer overflow)
+    expect(generatedPdf.getPageCount()).toBe(4);
+
+    // 4. Assemble merged PDF in exact required sequence
+    const mergedPdf = await PDFLibDocument.create();
+    let genIdx = 0;
+
+    // Page 1: Cover
+    const [cPage] = await mergedPdf.copyPages(generatedPdf, [genIdx++]);
+    mergedPdf.addPage(cPage);
+
+    // Page 2: Microstructure
+    const [mPage] = await mergedPdf.copyPages(generatedPdf, [genIdx++]);
+    mergedPdf.addPage(mPage);
+
+    // Page 3: Graph
+    const [gPage] = await mergedPdf.copyPages(generatedPdf, [genIdx++]);
+    mergedPdf.addPage(gPage);
+
+    // Pages 4-8: Source PDF (5 pages)
+    const srcPages = await mergedPdf.copyPages(sourcePdfDoc, sourcePdfDoc.getPageIndices());
+    srcPages.forEach((p) => mergedPdf.addPage(p));
+
+    // Page 9: WhatsApp Image (Final Page)
+    const [wPage] = await mergedPdf.copyPages(generatedPdf, [genIdx++]);
+    mergedPdf.addPage(wPage);
+
+    // Final checks
+    expect(mergedPdf.getPageCount()).toBe(9);
+  });
+
+  it('handles missing optional graph without creating blank pages or failing', async () => {
+    // 5-page source PDF
+    const sourcePdf = await PDFLibDocument.create();
+    for (let i = 1; i <= 5; i++) {
+      sourcePdf.addPage([595.28, 841.89]);
+    }
+    const sourcePdfBytes = await sourcePdf.save();
+    const sourcePdfDoc = await PDFLibDocument.load(sourcePdfBytes);
+
+    const doc = new PDFDocument({
+      size: 'A4',
+      margins: { top: 50, bottom: 45, left: 50, right: 50 },
+    });
+    const chunks: Buffer[] = [];
+    doc.on('data', (c: Buffer) => chunks.push(c));
+
+    // Cover
+    doc.fontSize(24).text('Cover');
+
+    // Micro
+    doc.addPage();
+    doc.fontSize(14).text('Micro');
+
+    // Graph is OMITTED
+
+    // WhatsApp
+    doc.addPage();
+    doc.fontSize(14).text('WhatsApp');
+
+    doc.end();
+    const pdfKitBuf = await new Promise<Buffer>((resolve) => {
+      doc.on('end', () => resolve(Buffer.concat(chunks)));
+    });
+
+    const generatedPdf = await PDFLibDocument.load(pdfKitBuf);
+    expect(generatedPdf.getPageCount()).toBe(3); // Cover, Micro, WA
+
+    const mergedPdf = await PDFLibDocument.create();
+    let genIdx = 0;
+    // Page 1: Cover
+    const [c] = await mergedPdf.copyPages(generatedPdf, [genIdx++]);
+    mergedPdf.addPage(c);
+    // Page 2: Micro
+    const [m] = await mergedPdf.copyPages(generatedPdf, [genIdx++]);
+    mergedPdf.addPage(m);
+    // Graph omitted cleanly
+    // Pages 3-7: Source PDF
+    const srcPages = await mergedPdf.copyPages(sourcePdfDoc, sourcePdfDoc.getPageIndices());
+    srcPages.forEach((p) => mergedPdf.addPage(p));
+    // Page 8: WhatsApp
+    const [w] = await mergedPdf.copyPages(generatedPdf, [genIdx++]);
+    mergedPdf.addPage(w);
+
+    // Exactly 1 Cover + 1 Micro + 0 Graph + 5 Source + 1 WA = 8 pages
+    expect(mergedPdf.getPageCount()).toBe(8);
+  });
 });

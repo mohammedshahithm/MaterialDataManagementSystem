@@ -48,3 +48,13 @@ Thumbs.db
 # Other caches
 .cache/
 **/.cache/
+# Vercel
+.vercel/
+
+# Vite cache
+.vite/
+**/.vite/
+
+# Additional temporary files
+*.tmp
+*.temp
